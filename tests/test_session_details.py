@@ -1,6 +1,8 @@
 """PPPoE/HotSpot split and DHCP pool utilisation from the RouterOS API."""
 
-from app.collector import MonitorState
+import threading
+
+from app.collector import MonitorState, SnmpCollector, SYS_UPTIME, _Plan
 from app.config import ApiConfig, AppConfig
 from app.metrics import count_ip_ranges
 from app.routeros_api import ApiReading, RouterOsApi
@@ -81,3 +83,42 @@ def test_session_details_setter_is_available_to_demo_feed():
     assert snapshot.dhcp_leases == 170
     assert snapshot.dhcp_pool_used == 170
     assert snapshot.dhcp_pool_size == 200
+
+
+class FakeSnmpClient:
+    def get(self, oids):
+        return {SYS_UPTIME: 100}
+
+
+def _snmp_poll_with_api(monkeypatch, api_enabled):
+    config = AppConfig()
+    config.router.api.enabled = api_enabled
+    collector = SnmpCollector(config, MonitorState(config), threading.Event())
+    monkeypatch.setattr(collector, "_pppoe_count", lambda client: 12)
+    return collector._poll(FakeSnmpClient(), _Plan(pppoe_users=True))
+
+
+def test_snmp_does_not_report_users_when_api_is_enabled(monkeypatch):
+    values = _snmp_poll_with_api(monkeypatch, api_enabled=True)
+
+    assert values["active_users"] is None
+
+
+def test_snmp_still_counts_pppoe_when_api_is_disabled(monkeypatch):
+    values = _snmp_poll_with_api(monkeypatch, api_enabled=False)
+
+    assert values["active_users"] == 12
+    assert values["users_source"] == "SNMP"
+
+
+def test_active_users_source_does_not_flip_when_both_collectors_run(monkeypatch):
+    config = AppConfig()
+    config.router.api.enabled = True
+    state = MonitorState(config)
+    collector = SnmpCollector(config, state, threading.Event())
+    monkeypatch.setattr(collector, "_pppoe_count", lambda client: 12)
+
+    state.apply_api(ApiReading(active_users=12), 1001.0)
+    state.apply_snmp(ts=1002.0, **collector._poll(FakeSnmpClient(), _Plan(pppoe_users=True)))
+
+    assert state.snapshot(now=1002.0).active_users_source == "RouterOS API"

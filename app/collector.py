@@ -543,16 +543,20 @@ class SnmpCollector(threading.Thread):
         users_source = "N/A"
         users = 0
         has_users = False
-        if plan.users_oid:
-            raw_users = values.get(plan.users_oid)
-            if isinstance(raw_users, int):
-                users += raw_users
-                has_users = True
-        if plan.pppoe_users:
-            count = self._pppoe_count(client)
-            if count is not None:
-                users += count
-                has_users = True
+        # RouterOS API owns active_users when enabled. SNMP must not publish a
+        # second count here, otherwise the two threads overwrite each other's
+        # value and the widget keeps flipping between both source labels.
+        if not self.config.router.api.enabled:
+            if plan.users_oid:
+                raw_users = values.get(plan.users_oid)
+                if isinstance(raw_users, int):
+                    users += raw_users
+                    has_users = True
+            if plan.pppoe_users:
+                count = self._pppoe_count(client)
+                if count is not None:
+                    users += count
+                    has_users = True
         if has_users:
             active_users = users
             users_source = "SNMP"
