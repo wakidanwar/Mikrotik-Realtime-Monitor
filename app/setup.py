@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -265,6 +266,13 @@ class SetupWindow(FramelessMixin, QMainWindow):
         right_col.addWidget(QLabel("Monitored:"))
         self.selected_list = QListWidget()
         right_col.addWidget(self.selected_list, 1)
+        capacity_row = QHBoxLayout()
+        capacity_row.addWidget(QLabel("Max Mbps:"))
+        self.iface_max_spin = QDoubleSpinBox()
+        self.iface_max_spin.setRange(0.0, 1_000_000.0)
+        self.iface_max_spin.setDecimals(1)
+        capacity_row.addWidget(self.iface_max_spin, 1)
+        right_col.addLayout(capacity_row)
         self.btn_remove = QPushButton("Remove")
         right_col.addWidget(self.btn_remove)
         lists_row.addLayout(right_col, 1)
@@ -282,7 +290,7 @@ class SetupWindow(FramelessMixin, QMainWindow):
         advanced_layout = QVBoxLayout(tab_advanced)
         self.tabs.addTab(tab_advanced, "Lanjutan")
         self.advanced_layout = advanced_layout
-        advanced_layout.addWidget(QLabel("Pengaturan lanjutan per profil."))
+        self._build_advanced_tab(advanced_layout)
 
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
@@ -312,6 +320,124 @@ class SetupWindow(FramelessMixin, QMainWindow):
         self.btn_apply.clicked.connect(self._apply_settings)
         self.btn_toggle_pw.clicked.connect(self._toggle_password)
         self.ros_combo.currentTextChanged.connect(self._on_device_mode_changed)
+        self.selected_list.itemSelectionChanged.connect(self._on_monitored_selected)
+        self.iface_max_spin.valueChanged.connect(self._on_iface_max_changed)
+
+    # -- advanced settings -------------------------------------------------
+    def _build_advanced_tab(self, parent_layout) -> None:
+        from app.profiles import _default_ping_targets
+
+        grp_snmp = QGroupBox("SNMP & RouterOS API")
+        form = QFormLayout(grp_snmp)
+        self.snmp_port_spin = QSpinBox()
+        self.snmp_port_spin.setRange(1, 65535)
+        self.snmp_port_spin.setValue(161)
+        self.snmp_timeout_spin = QDoubleSpinBox()
+        self.snmp_timeout_spin.setRange(0.1, 30.0)
+        self.snmp_timeout_spin.setDecimals(1)
+        self.snmp_timeout_spin.setValue(1.0)
+        self.snmp_retries_spin = QSpinBox()
+        self.snmp_retries_spin.setRange(0, 5)
+        self.snmp_retries_spin.setValue(1)
+        self.api_interval_spin = QDoubleSpinBox()
+        self.api_interval_spin.setRange(0.5, 60.0)
+        self.api_interval_spin.setDecimals(1)
+        self.api_interval_spin.setValue(2.0)
+        form.addRow("SNMP port:", self.snmp_port_spin)
+        form.addRow("SNMP timeout (s):", self.snmp_timeout_spin)
+        form.addRow("SNMP retries:", self.snmp_retries_spin)
+        form.addRow("API interval (s):", self.api_interval_spin)
+        parent_layout.addWidget(grp_snmp)
+
+        grp_poll = QGroupBox("Polling")
+        poll_form = QFormLayout(grp_poll)
+        self.polling_interval_spin = QDoubleSpinBox()
+        self.polling_interval_spin.setRange(0.2, 60.0)
+        self.polling_interval_spin.setDecimals(1)
+        self.polling_interval_spin.setValue(1.0)
+        self.history_spin = QSpinBox()
+        self.history_spin.setRange(10, 3600)
+        self.history_spin.setValue(120)
+        poll_form.addRow("Interval (s):", self.polling_interval_spin)
+        poll_form.addRow("History (s):", self.history_spin)
+        parent_layout.addWidget(grp_poll)
+
+        grp_ping = QGroupBox("Ping")
+        ping_form = QFormLayout(grp_ping)
+        self.ping_interval_spin = QDoubleSpinBox()
+        self.ping_interval_spin.setRange(0.2, 60.0)
+        self.ping_interval_spin.setDecimals(1)
+        self.ping_interval_spin.setValue(1.0)
+        self.ping_timeout_spin = QSpinBox()
+        self.ping_timeout_spin.setRange(100, 10_000)
+        self.ping_timeout_spin.setValue(1000)
+        self.ping_window_spin = QSpinBox()
+        self.ping_window_spin.setRange(5, 600)
+        self.ping_window_spin.setValue(60)
+        ping_form.addRow("Interval (s):", self.ping_interval_spin)
+        ping_form.addRow("Timeout (ms):", self.ping_timeout_spin)
+        ping_form.addRow("Window (s):", self.ping_window_spin)
+        parent_layout.addWidget(grp_ping)
+
+        self.ping_targets_table = QTableWidget(0, 2)
+        self.ping_targets_table.setHorizontalHeaderLabels(["Name", "Host"])
+        self.ping_targets_table.verticalHeader().setVisible(False)
+        self.ping_targets_table.horizontalHeader().setStretchLastSection(True)
+        self.ping_targets_table.setColumnWidth(0, 180)
+        self._load_ping_targets(_default_ping_targets())
+        parent_layout.addWidget(QLabel("Ping targets:"))
+        parent_layout.addWidget(self.ping_targets_table)
+
+        grp_oids = QGroupBox("OIDs")
+        oid_form = QFormLayout(grp_oids)
+        self.oid_temperature_edit = QLineEdit()
+        self.oid_voltage_edit = QLineEdit()
+        self.oid_cpu_edit = QLineEdit()
+        self.oid_active_users_edit = QLineEdit()
+        oid_form.addRow("Temperature:", self.oid_temperature_edit)
+        oid_form.addRow("Voltage:", self.oid_voltage_edit)
+        oid_form.addRow("CPU:", self.oid_cpu_edit)
+        oid_form.addRow("Active users:", self.oid_active_users_edit)
+        parent_layout.addWidget(grp_oids)
+
+    def _load_ping_targets(self, targets) -> None:
+        self.ping_targets_table.setRowCount(len(targets))
+        for row, target in enumerate(targets):
+            self.ping_targets_table.setItem(row, 0, QTableWidgetItem(target.name))
+            self.ping_targets_table.setItem(row, 1, QTableWidgetItem(target.host))
+
+    def _collect_ping_targets(self):
+        from app.profiles import PingTargetChoice
+
+        targets = []
+        for row in range(self.ping_targets_table.rowCount()):
+            name_item = self.ping_targets_table.item(row, 0)
+            host_item = self.ping_targets_table.item(row, 1)
+            host = host_item.text().strip() if host_item is not None else ""
+            if not host:
+                continue
+            name = name_item.text().strip() if name_item is not None else host
+            targets.append(PingTargetChoice(name=name, host=host))
+        return targets
+
+    def _on_monitored_selected(self) -> None:
+        row = self.selected_list.currentRow()
+        if row < 0:
+            return
+        data = self.selected_list.item(row).data(Qt.UserRole)
+        if isinstance(data, dict):
+            self.iface_max_spin.setValue(float(data.get("max_mbps", 0) or 0))
+
+    def _on_iface_max_changed(self, value: float) -> None:
+        row = self.selected_list.currentRow()
+        if row < 0:
+            return
+        item = self.selected_list.item(row)
+        data = item.data(Qt.UserRole)
+        if not isinstance(data, dict):
+            data = {"name": item.text(), "label": item.text(), "max_mbps": 0.0}
+        data["max_mbps"] = float(value)
+        item.setData(Qt.UserRole, data)
 
     # -- alarm rules -------------------------------------------------------
     def _set_status(self, text: str, color: str = "#EF4444") -> None:
@@ -589,9 +715,29 @@ class SetupWindow(FramelessMixin, QMainWindow):
         self.ros_combo.setCurrentText(mapping.get(p.ros_version, "RouterOS V7"))
         self._on_device_mode_changed(self.ros_combo.currentText())
         self.identity_edit.setText(p.name)
+        self.snmp_port_spin.setValue(p.snmp_port)
+        self.snmp_timeout_spin.setValue(p.snmp_timeout)
+        self.snmp_retries_spin.setValue(p.snmp_retries)
+        self.api_interval_spin.setValue(p.api_interval)
+        self.polling_interval_spin.setValue(p.polling_interval)
+        self.history_spin.setValue(p.history_seconds)
+        self.ping_interval_spin.setValue(p.ping_interval)
+        self.ping_timeout_spin.setValue(p.ping_timeout_ms)
+        self.ping_window_spin.setValue(p.ping_window)
+        self._load_ping_targets(p.ping_targets)
+        self.oid_temperature_edit.setText(p.oid_temperature)
+        self.oid_voltage_edit.setText(p.oid_voltage)
+        self.oid_cpu_edit.setText(p.oid_cpu)
+        self.oid_active_users_edit.setText(p.oid_active_users)
         self.selected_list.clear()
         for iface in p.interfaces:
-            self.selected_list.addItem(iface.name)
+            item = QListWidgetItem(iface.name)
+            item.setData(Qt.UserRole, {
+                "name": iface.name,
+                "label": iface.label or iface.name,
+                "max_mbps": iface.max_mbps,
+            })
+            self.selected_list.addItem(item)
         self._update_quick_info(p)
 
     def _update_quick_info(self, p: RouterProfile):
@@ -611,8 +757,18 @@ class SetupWindow(FramelessMixin, QMainWindow):
         name = self.identity_edit.text().strip() or self.host_edit.text().strip()
         interfaces = []
         for i in range(self.selected_list.count()):
-            iname = self.selected_list.item(i).text().strip()
-            if iname:
+            item = self.selected_list.item(i)
+            iname = item.text().strip()
+            if not iname:
+                continue
+            data = item.data(Qt.UserRole)
+            if isinstance(data, dict):
+                interfaces.append(InterfaceChoice(
+                    name=str(data.get("name") or iname).strip(),
+                    label=str(data.get("label") or iname).strip(),
+                    max_mbps=float(data.get("max_mbps", 0) or 0),
+                ))
+            else:
                 interfaces.append(InterfaceChoice(name=iname, label=iname))
         return RouterProfile(
             name=name,
@@ -624,6 +780,20 @@ class SetupWindow(FramelessMixin, QMainWindow):
             api_use_ssl=self.api_port_spin.value() == 8729,
             ros_version={"RouterOS V6": "V6", "RouterOS V7": "V7", "SwOS": "SwOS"}[self.ros_combo.currentText()],
             snmp_version=2,
+            snmp_port=int(self.snmp_port_spin.value()),
+            snmp_timeout=float(self.snmp_timeout_spin.value()),
+            snmp_retries=int(self.snmp_retries_spin.value()),
+            api_interval=float(self.api_interval_spin.value()),
+            polling_interval=float(self.polling_interval_spin.value()),
+            history_seconds=int(self.history_spin.value()),
+            ping_interval=float(self.ping_interval_spin.value()),
+            ping_timeout_ms=int(self.ping_timeout_spin.value()),
+            ping_window=int(self.ping_window_spin.value()),
+            ping_targets=self._collect_ping_targets(),
+            oid_temperature=self.oid_temperature_edit.text().strip(),
+            oid_voltage=self.oid_voltage_edit.text().strip(),
+            oid_cpu=self.oid_cpu_edit.text().strip(),
+            oid_active_users=self.oid_active_users_edit.text().strip(),
             interfaces=interfaces,
         )
 
@@ -639,6 +809,24 @@ class SetupWindow(FramelessMixin, QMainWindow):
         self.identity_edit.clear()
         self.discovered_table.setRowCount(0)
         self.selected_list.clear()
+        self.iface_max_spin.setValue(0.0)
+        from app.config import DEFAULT_TEMPERATURE_OID, DEFAULT_VOLTAGE_OID
+        from app.profiles import _default_ping_targets
+
+        self.snmp_port_spin.setValue(161)
+        self.snmp_timeout_spin.setValue(1.0)
+        self.snmp_retries_spin.setValue(1)
+        self.api_interval_spin.setValue(2.0)
+        self.polling_interval_spin.setValue(1.0)
+        self.history_spin.setValue(120)
+        self.ping_interval_spin.setValue(1.0)
+        self.ping_timeout_spin.setValue(1000)
+        self.ping_window_spin.setValue(60)
+        self._load_ping_targets(_default_ping_targets())
+        self.oid_temperature_edit.setText(DEFAULT_TEMPERATURE_OID)
+        self.oid_voltage_edit.setText(DEFAULT_VOLTAGE_OID)
+        self.oid_cpu_edit.clear()
+        self.oid_active_users_edit.clear()
         self.status_label.setText("")
         self.status_label.setStyleSheet("color: #EF4444;")
 
@@ -836,7 +1024,9 @@ class SetupWindow(FramelessMixin, QMainWindow):
             return
         existing = {self.selected_list.item(i).text() for i in range(self.selected_list.count())}
         if name not in existing:
-            self.selected_list.addItem(name)
+            item = QListWidgetItem(name)
+            item.setData(Qt.UserRole, {"name": name, "label": name, "max_mbps": 0.0})
+            self.selected_list.addItem(item)
 
     def _remove_selected(self):
         for it in self.selected_list.selectedItems():
