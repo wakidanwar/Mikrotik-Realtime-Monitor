@@ -49,7 +49,7 @@ def test_collapsing_all_left_widgets_shrinks_chart_area():
 
 
 def test_alarm_uses_mp3_once(monkeypatch, tmp_path):
-    audio = tmp_path / "auidio-alarm.mp3"
+    audio = tmp_path / "audio-alarm.mp3"
     audio.write_bytes(b"mp3")
     monkeypatch.setattr(ui_module, "resource_path", lambda _: audio)
 

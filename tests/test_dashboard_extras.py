@@ -29,26 +29,40 @@ class FakePlayer:
 
 
 def test_radius_alarm_plays_once(monkeypatch, tmp_path):
-    audio = tmp_path / "auidio-alarm.mp3"
+    audio = tmp_path / "audio-alarm.mp3"
     audio.write_bytes(b"mp3")
-    monkeypatch.setattr(ui_module, "resource_path", lambda _: audio)
+    requested = []
+
+    def fake_resource_path(rel):
+        requested.append(rel)
+        return audio
+
+    monkeypatch.setattr(ui_module, "resource_path", fake_resource_path)
     player = FakePlayer()
     monkeypatch.setattr(ui_module, "_alarm_player", player)
 
     ui_module._play_alarm()
 
+    assert requested == ["assets/audio-alarm.mp3"]
     assert player.calls == [(audio, 1)]
 
 
 def test_warning_alarm_uses_warning_mp3_once(monkeypatch, tmp_path):
     audio = tmp_path / "warning.mp3"
     audio.write_bytes(b"mp3")
-    monkeypatch.setattr(ui_module, "resource_path", lambda rel: audio if "warning" in rel else tmp_path / "no.mp3")
+    requested = []
+
+    def fake_resource_path(rel):
+        requested.append(rel)
+        return audio
+
+    monkeypatch.setattr(ui_module, "resource_path", fake_resource_path)
     player = FakePlayer()
     monkeypatch.setattr(ui_module, "_warning_player", player)
 
     ui_module._play_warning()
 
+    assert requested == ["assets/warning.mp3"]
     assert player.calls == [(audio, 1)]
 
 

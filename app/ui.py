@@ -530,11 +530,11 @@ def _play_audio_once(path, holder_name: str) -> None:
 
 
 def _play_alarm() -> None:
-    _play_audio_once(resource_path("auidio-alarm.mp3"), "_alarm_player")
+    _play_audio_once(resource_path("assets/audio-alarm.mp3"), "_alarm_player")
 
 
 def _play_warning() -> None:
-    _play_audio_once(resource_path("warning.mp3"), "_warning_player")
+    _play_audio_once(resource_path("assets/warning.mp3"), "_warning_player")
 
 
 def _dns_loss_exceeded(pings) -> bool:

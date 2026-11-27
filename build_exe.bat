@@ -14,8 +14,8 @@ if not exist ".venv\Scripts\python.exe" (
     --name "Mikrotik-Realtime-Monitor" ^
     --icon "assets\icon.ico" ^
     --add-data "assets\icon.png;assets" ^
-    --add-data "auidio-alarm.mp3;." ^
-    --add-data "warning.mp3;." ^
+    --add-data "assets\audio-alarm.mp3;assets" ^
+    --add-data "assets\warning.mp3;assets" ^
     --collect-data qtawesome ^
     --hidden-import librouteros ^
     --hidden-import PySide6.QtMultimedia ^
