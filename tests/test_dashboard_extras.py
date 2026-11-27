@@ -1,6 +1,8 @@
 """Extra dashboard controls: single-shot alarm, DNS warning, scale, fullscreen."""
 
 import os
+import sys
+import types
 from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -8,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QWidget
 
 import app.ui as ui_module
+from app.alarms import AlarmSettings
 from app.collector import MonitorState
 from app.config import AppConfig, PingTargetConfig
 from app.ping import PingStats
@@ -66,6 +69,42 @@ def test_warning_alarm_uses_warning_mp3_once(monkeypatch, tmp_path):
     assert player.calls == [(audio, 1)]
 
 
+def test_custom_sound_missing_falls_back_without_error(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(ui_module, "user_path", lambda _: tmp_path / "missing.mp3")
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "winsound", types.SimpleNamespace(
+        Beep=lambda freq, duration: calls.append((freq, duration)),
+    ))
+    monkeypatch.setattr(ui_module.QTimer, "singleShot", lambda *args, **kwargs: args[-1]())
+
+    ui_module._play_sound("custom:alarms/missing.mp3")
+
+    assert len(calls) == 1
+
+
+def test_ping_warning_settings_control_sound(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    config = AppConfig()
+    config.ping.targets = [PingTargetConfig(name="DNS", host="8.8.8.8")]
+    window = MonitorWindow(config, MonitorState(config))
+    played = []
+    monkeypatch.setattr(ui_module, "_play_sound", lambda sound, holder=None: played.append(sound))
+    window.alarm_settings = AlarmSettings(
+        ping_warning_enabled=False,
+        ping_warning_sound="custom:alarms/dns.mp3",
+    )
+    bad = SimpleNamespace(pings=[PingStats("DNS", "8.8.8.8", 10.0, 2.0, 10, 10.0)])
+
+    window._check_dns_warning(bad)
+    assert played == []
+
+    window.alarm_settings.ping_warning_enabled = True
+    window._check_dns_warning(SimpleNamespace(pings=[]))
+    window._check_dns_warning(bad)
+    assert played == ["custom:alarms/dns.mp3"]
+
+
 def test_dns_loss_helper_uses_one_percent_threshold():
     low = PingStats("DNS", "8.8.8.8", 10.0, 0.9, 10, 10.0)
     high = PingStats("DNS2", "1.1.1.1", 10.0, 1.1, 10, 10.0)
@@ -80,14 +119,14 @@ def test_dns_warning_fires_once_until_loss_recovers(monkeypatch):
     config.ping.targets = [PingTargetConfig(name="DNS", host="8.8.8.8")]
     window = MonitorWindow(config, MonitorState(config))
     played = []
-    monkeypatch.setattr(ui_module, "_play_warning", lambda: played.append(1))
+    monkeypatch.setattr(ui_module, "_play_sound", lambda sound, holder=None: played.append(sound))
 
     bad = SimpleNamespace(pings=[PingStats("DNS", "8.8.8.8", 10.0, 2.0, 10, 10.0)])
     good = SimpleNamespace(pings=[PingStats("DNS", "8.8.8.8", 10.0, 0.0, 10, 10.0)])
 
     window._check_dns_warning(bad)
     window._check_dns_warning(bad)
-    assert len(played) == 1
+    assert played == ["bundled:assets/warning.mp3"]
 
     window._check_dns_warning(good)
     window._check_dns_warning(bad)

@@ -147,6 +147,7 @@ class FramelessMixin:
 
 import sys
 import threading
+import time
 from collections import deque
 
 import numpy as np
@@ -162,9 +163,13 @@ from PySide6.QtWidgets import (
     QScrollArea, QStyle, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QSizeGrip,
 )
 
+from app.alarms import (
+    DEFAULT_ALARM_SOUND, DEFAULT_WARNING_SOUND, AlarmSettings, AlarmStore,
+    evaluate_entries,
+)
 from app.collector import InterfaceReading, MonitorState, Snapshot, build_collectors
 from app.config import AppConfig, InterfaceConfig, PingTargetConfig
-from app.paths import resource_path
+from app.paths import resource_path, user_path
 from app.metrics import (
     format_axis_ago, format_axis_clock, format_bps, format_bps_axis,
     format_uptime, median_filter, nice_ceiling, robust_peak, smooth_series,
@@ -445,19 +450,12 @@ def _format_log_entry(entry: dict, max_message: int = 60) -> str:
     return f"{time:<11}  {topics:<14}  {message}"
 
 
-RADIUS_ALARM_TEXT = "radius server is not responding"
-
-
 def _full_log_line(entry: dict) -> str:
     """Tab-separated full row, ready for the clipboard."""
     time = str(entry.get("time", "") or "")
     topics = str(entry.get("topics", "") or "")
     message = str(entry.get("message", "") or "")
     return f"{time}\t{topics}\t{message}"
-
-
-def _should_alarm(entry: dict) -> bool:
-    return RADIUS_ALARM_TEXT in str(entry.get("message", "") or "").lower()
 
 
 def _filter_logs(entries, query: str) -> list:
@@ -496,7 +494,7 @@ _warning_player = None
 
 def _play_audio_once(path, holder_name: str) -> None:
     holder = globals().get(holder_name)
-    if path.exists() and QMediaPlayer is not None:
+    if path is not None and path.exists() and QMediaPlayer is not None:
         if holder is None:
             from PySide6.QtWidgets import QApplication
             holder = AlarmPlayer(QApplication.instance())
@@ -529,12 +527,24 @@ def _play_audio_once(path, holder_name: str) -> None:
     QTimer.singleShot(0, fallback_beep)
 
 
+def _play_sound(choice: str, holder_name: str = "_alarm_player") -> None:
+    """Play a bundled or user-uploaded sound; fall back to a beep if missing."""
+    choice = choice or ""
+    if choice.startswith("bundled:"):
+        path = resource_path(choice.split(":", 1)[1])
+    elif choice.startswith("custom:"):
+        path = user_path(choice.split(":", 1)[1])
+    else:
+        path = None
+    _play_audio_once(path, holder_name)
+
+
 def _play_alarm() -> None:
-    _play_audio_once(resource_path("assets/audio-alarm.mp3"), "_alarm_player")
+    _play_sound(DEFAULT_ALARM_SOUND, "_alarm_player")
 
 
 def _play_warning() -> None:
-    _play_audio_once(resource_path("assets/warning.mp3"), "_warning_player")
+    _play_sound(DEFAULT_WARNING_SOUND, "_warning_player")
 
 
 def _dns_loss_exceeded(pings) -> bool:
@@ -1115,6 +1125,8 @@ class MonitorWindow(FramelessMixin, QMainWindow):
         self._log_detail = None
         self._last_logs = []
         self._alarm_seen = set()
+        self._alarm_cooldowns = {}
+        self.alarm_settings: AlarmSettings = AlarmStore().load()
         self._dns_warn_active = False
         self.collapsibles = {}
         self.left_scroll = None
@@ -1303,9 +1315,12 @@ class MonitorWindow(FramelessMixin, QMainWindow):
 
     def _check_dns_warning(self, snapshot) -> None:
         exceeded = _dns_loss_exceeded(snapshot.pings)
+        if not self.alarm_settings.ping_warning_enabled:
+            self._dns_warn_active = exceeded
+            return
         if exceeded and not self._dns_warn_active:
             self._dns_warn_active = True
-            _play_warning()
+            _play_sound(self.alarm_settings.ping_warning_sound, "_warning_player")
         elif not exceeded:
             self._dns_warn_active = False
 
@@ -1478,6 +1493,8 @@ class MonitorWindow(FramelessMixin, QMainWindow):
         return card
 
     def _update_logs(self, snapshot: Snapshot) -> None:
+        if not hasattr(self, "logs_list"):
+            return
         entries = snapshot.logs or []
         signature = tuple(
             (str(e.get("time", "") or ""), str(e.get("topics", "") or ""), str(e.get("message", "") or ""))
@@ -1492,15 +1509,25 @@ class MonitorWindow(FramelessMixin, QMainWindow):
 
         if len(self._alarm_seen) > 200:
             self._alarm_seen.clear()
-        for entry in entries:
-            if not _should_alarm(entry):
-                continue
-            key = (str(entry.get("time", "") or ""), str(entry.get("message", "") or ""))
-            if key in self._alarm_seen:
-                continue
-            self._alarm_seen.add(key)
-            if self.alarm_btn.isChecked():
-                _play_alarm()
+        device_type = str(getattr(self.config.router, "device_type", "routeros")).lower()
+        is_routeros = (
+            device_type == "routeros"
+            and str(self.config.router.ros_version).upper() in ("V6", "V7")
+        )
+        if is_routeros:
+            fired = evaluate_entries(
+                entries,
+                self.alarm_settings.log_rules,
+                self._alarm_seen,
+                time.monotonic(),
+                self._alarm_cooldowns,
+                master_on=(
+                    self.alarm_btn.isChecked()
+                    if hasattr(self, "alarm_btn") else True
+                ),
+            )
+            for rule in fired:
+                _play_sound(rule.sound, "_alarm_player")
 
         self.logs_list.clear()
         api_enabled = self.config.router.api.enabled

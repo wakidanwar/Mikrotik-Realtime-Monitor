@@ -8,6 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 import app.ui as ui_module
+from app.alarms import AlarmRule, AlarmSettings, rule_matches
 from app.collector import MonitorState
 from app.config import AppConfig
 from app.ping import PingStats
@@ -20,7 +21,6 @@ from app.ui import (
     _format_log_entry,
     _full_log_line,
     _short_log_time,
-    _should_alarm,
 )
 
 
@@ -82,11 +82,13 @@ def test_full_log_line_is_copy_ready():
     assert line == "2026-11-26 09:12:04\tsystem,info\tuser admin logged in"
 
 
-def test_radius_failure_triggers_alarm_only_for_that_message():
-    assert _should_alarm({"message": "RADIUS server is not responding"})
-    assert _should_alarm({"message": "radius server is not responding now"})
-    assert not _should_alarm({"message": "RADIUS server replied"})
-    assert not _should_alarm({})
+def test_radius_rule_matches_only_that_message():
+    rule = AlarmRule(id="radius", phrase="radius server is not responding")
+
+    assert rule_matches({"message": "RADIUS server is not responding"}, rule)
+    assert rule_matches({"message": "radius server is not responding now"}, rule)
+    assert not rule_matches({"message": "RADIUS server replied"}, rule)
+    assert not rule_matches({}, rule)
 
 
 def test_detail_filter_searches_message_case_insensitively():
@@ -135,7 +137,7 @@ def test_detail_filter_and_copy_use_full_log_text():
 def test_alarm_sounds_once_per_new_radius_log(monkeypatch):
     app = QApplication.instance() or QApplication([])
     calls = []
-    monkeypatch.setattr(ui_module, "_play_alarm", lambda: calls.append(1))
+    monkeypatch.setattr(ui_module, "_play_sound", lambda sound, holder=None: calls.append(sound))
     config = AppConfig()
     state = MonitorState(config)
     window = MonitorWindow(config, state)
@@ -143,7 +145,7 @@ def test_alarm_sounds_once_per_new_radius_log(monkeypatch):
     state.set_logs([{"time": "09:12:04", "message": "RADIUS server is not responding"}])
     window._update_logs(state.snapshot())
     window._update_logs(state.snapshot())
-    assert len(calls) == 1
+    assert calls == ["bundled:assets/audio-alarm.mp3"]
 
     window.alarm_btn.setChecked(False)
     assert window.alarm_btn.text() == "Alarm off"
@@ -153,6 +155,43 @@ def test_alarm_sounds_once_per_new_radius_log(monkeypatch):
     ])
     window._update_logs(state.snapshot())
     assert len(calls) == 1
+
+
+def test_swos_log_does_not_fire_log_alarm(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    config = AppConfig()
+    config.router.device_type = "swos"
+    config.router.api.enabled = True
+    state = MonitorState(config)
+    window = MonitorWindow(config, state)
+    window.alarm_settings = AlarmSettings(log_rules=[
+        AlarmRule(id="radius", phrase="radius server is not responding"),
+    ])
+    calls = []
+    monkeypatch.setattr(ui_module, "_play_sound", lambda sound, holder=None: calls.append(sound))
+
+    state.set_logs([{"time": "09:12:04", "message": "RADIUS server is not responding"}])
+    window._update_logs(state.snapshot())
+
+    assert calls == []
+
+
+def test_only_first_matching_rule_plays(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    config = AppConfig()
+    state = MonitorState(config)
+    window = MonitorWindow(config, state)
+    window.alarm_settings = AlarmSettings(log_rules=[
+        AlarmRule(id="first", phrase="link down", sound="bundled:first.mp3"),
+        AlarmRule(id="second", phrase="link down", sound="bundled:second.mp3"),
+    ])
+    calls = []
+    monkeypatch.setattr(ui_module, "_play_sound", lambda sound, holder=None: calls.append(sound))
+
+    state.set_logs([{"time": "09:12:04", "message": "link down"}])
+    window._update_logs(state.snapshot())
+
+    assert calls == ["bundled:first.mp3"]
 
 
 def test_users_card_breaks_down_sessions_and_dhcp_usage():
