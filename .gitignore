@@ -16,6 +16,7 @@ dist/
 Release/
 *.exe
 *.zip
+*.spec
 
 # Local backups and logs
 backup_*/
