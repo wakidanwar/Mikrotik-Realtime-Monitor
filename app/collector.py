@@ -117,6 +117,7 @@ class MonitorState:
 
         self._ping_windows = {target.name: PingWindow(config.ping.window) for target in config.ping.targets}
         self._started = time.monotonic()
+        self._rate_warmup_until = self._started + 3.0
         self._ok_ts: dict[str, float] = {}
         self._fail_counts: dict[str, int] = {}
         self._errors: dict[str, str] = {}
@@ -145,10 +146,19 @@ class MonitorState:
                     continue
                 previous = self._counters.get(name)
                 rx = tx = None
-                if previous is not None:
+                warmup = ts < self._rate_warmup_until
+                if previous is not None and not warmup:
                     elapsed = ts - previous[0]
                     rx = compute_bps(previous[1], in_octets, elapsed, bits)
                     tx = compute_bps(previous[2], out_octets, elapsed, bits)
+                    # Guard against bogus counter jumps (e.g. bad baseline/wrap).
+                    speed_mbps = speeds.get(name)
+                    if speed_mbps and speed_mbps > 0:
+                        cap = speed_mbps * 1_000_000 * 1.5
+                        if rx is not None and rx > cap:
+                            rx = None
+                        if tx is not None and tx > cap:
+                            tx = None
                 self._counters[name] = (ts, in_octets, out_octets)
                 reading.link_up = oper.get(name)
                 reading.speed_mbps = speeds.get(name)
@@ -207,6 +217,21 @@ class MonitorState:
         with self.lock:
             if name in self._interface_errors:
                 self._interface_errors[name] = message
+
+    def reset_counters(self, names: set[str] | None = None) -> None:
+        """Drop rate baselines so the next sample becomes a clean baseline.
+
+        Used when interface mapping/OIDs change or after reconnect, to avoid
+        bogus deltas (e.g. 32-bit wrap spikes) on the first post-reset sample.
+        """
+        with self.lock:
+            if names is None:
+                self._counters.clear()
+            else:
+                for name in names:
+                    self._counters.pop(name, None)
+            # Ignore rate samples briefly after a reset to avoid first-load spikes.
+            self._rate_warmup_until = max(self._rate_warmup_until, time.monotonic() + 3.0)
 
     def _mark_ok(self, source: str, ts: float) -> None:
         with self.lock:
@@ -370,7 +395,20 @@ class SnmpCollector(threading.Thread):
                         version=snmp.version,
                     )
                 if plan is None or started >= next_resolve:
+                    old_keys = {
+                        (p.config.name, p.in_oid, p.out_oid, p.bits)
+                        for p in (plan.interfaces if plan else [])
+                    }
                     plan = self._resolve(client)
+                    new_keys = {
+                        (p.config.name, p.in_oid, p.out_oid, p.bits)
+                        for p in plan.interfaces
+                    }
+                    stale = {k[0] for k in old_keys if k not in new_keys} | {
+                        k[0] for k in new_keys if k not in old_keys
+                    }
+                    if stale:
+                        self.state.reset_counters(stale)
                     for iface in self.config.interfaces:
                         self.state.set_interface_error(iface.name, plan.missing.get(iface.name, ""))
                     if plan.missing or (not plan.pppoe_users and plan.users_oid is None):
@@ -386,6 +424,8 @@ class SnmpCollector(threading.Thread):
                     client.close()
                 client = None
                 plan = None
+                # Drop baselines so reconnect/rescan does not produce a bogus delta.
+                self.state.reset_counters()
                 self.stop_event.wait(max(0.2, min(2.0, self.config.polling.interval)))
                 continue
 

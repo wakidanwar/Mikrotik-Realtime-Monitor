@@ -861,9 +861,9 @@ class TrafficChart(QFrame):
         self._x_grid = grid
         self._target_rx = list(np.interp(grid, xs, rx, left=rx[0], right=rx[-1]))
         self._target_tx = list(np.interp(grid, xs, tx, left=tx[0], right=tx[-1]))
-        if len(self._display_rx) != len(grid):
-            self._display_rx = list(self._target_rx)
-            self._display_tx = list(self._target_tx)
+        # Render directly; smooth_series already provides enough visual smoothing.
+        self._display_rx = list(self._target_rx)
+        self._display_tx = list(self._target_tx)
 
         peak = robust_peak(rx + tx)
         # A percentile alone hides a genuine sustained rise: if several recent
@@ -885,8 +885,6 @@ class TrafficChart(QFrame):
         self.plot.setYRange(0, max(self._ymax, 1000.0), padding=0)
         self._apply_gradient()
         self._render_curves()
-        if not self._anim.isActive():
-            self._anim.start()
 
     def _apply_gradient(self) -> None:
         top = max(self._ymax or 1_000_000.0, 1000.0)
