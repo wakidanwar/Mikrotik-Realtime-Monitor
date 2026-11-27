@@ -40,7 +40,7 @@ from app.paths import resource_path, user_dir
 from app.profiles import InterfaceChoice, ProfileStore, RouterProfile
 from app.routeros_api import RouterOsApi
 from app.config import ApiConfig
-from app.ui import FramelessMixin, TitleBar, scaled_qss
+from app.ui import TitleBar, scaled_qss
 import qtawesome as qta
 
 
@@ -59,7 +59,7 @@ class TaskWorker(QThread):
             self.error.emit(str(exc))
 
 
-class SetupWindow(FramelessMixin, QMainWindow):
+class SetupWindow(QMainWindow):
     connect_requested = Signal(object)  # RouterProfile
     settings_applied = Signal(object)   # AppConfig
 
@@ -78,7 +78,6 @@ class SetupWindow(FramelessMixin, QMainWindow):
         _ip = str(resource_path("assets/icon.png"))
         if os.path.exists(_ip):
             self.setWindowIcon(QIcon(_ip))
-        self.setup_frameless()
         self.setStyleSheet(scaled_qss())
         self._build_ui()
         self._on_device_mode_changed(self.ros_combo.currentText())

@@ -2,17 +2,17 @@
 from __future__ import annotations
 import os
 import re
-# -- frameless / title bar -------------------------------------------------
-from PySide6.QtCore import Qt, QRect
-from PySide6.QtWidgets import QHBoxLayout as _HBox, QLabel as _QLabel, QPushButton as _QPushButton, QSizeGrip as _QSizeGrip, QWidget
+# -- information strip (the real title bar belongs to the OS) --------------
+from PySide6.QtWidgets import QHBoxLayout as _HBox, QLabel as _QLabel, QWidget
 
 
 class TitleBar(QWidget):
+    """Non-interactive context strip; window controls are native OS buttons."""
+
     def __init__(self, title: str, context: str = "", parent=None):
         super().__init__(parent)
         self.setObjectName("titleBar")
         self.setFixedHeight(34)
-        self._drag_pos = None
         layout = _HBox(self)
         layout.setContentsMargins(10, 0, 6, 0)
         layout.setSpacing(8)
@@ -28,120 +28,9 @@ class TitleBar(QWidget):
         self.context_label.setObjectName("titleBarContext")
         layout.addWidget(self.context_label)
         layout.addStretch(1)
-        self.min_btn = _QPushButton("—")
-        self.max_btn = _QPushButton("□")
-        self.close_btn = _QPushButton("×")
-        for b in (self.min_btn, self.max_btn):
-            b.setFixedSize(32, 24)
-            b.setStyleSheet("QPushButton { background: transparent; color: #94a3b8; border: none; font-size: 11px; font-weight: 700; border-radius: 4px; } QPushButton:hover { background: #1e293b; color: #f8fafc; }")
-        self.close_btn.setFixedSize(32, 24)
-        self.close_btn.setStyleSheet("QPushButton { background: transparent; color: #94a3b8; border: none; font-size: 14px; font-weight: 700; border-radius: 4px; } QPushButton:hover { background: #ef4444; color: #ffffff; }")
-        self.min_btn.clicked.connect(lambda: self.window().showMinimized())
-        self.max_btn.clicked.connect(self._toggle_max)
-        self.close_btn.clicked.connect(lambda: self.window().close())
-        layout.addWidget(self.min_btn)
-        layout.addWidget(self.max_btn)
-        layout.addWidget(self.close_btn)
 
     def set_context(self, text: str):
         self.context_label.setText(text)
-
-    def _toggle_max(self):
-        w = self.window()
-        if w.isMaximized():
-            w.showNormal()
-            self.max_btn.setText("□")
-        else:
-            w.showMaximized()
-            self.max_btn.setText("❐")
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self._drag_pos = event.globalPosition().toPoint() - self.window().frameGeometry().topLeft()
-            event.accept()
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.LeftButton and self._drag_pos is not None:
-            self.window().move(event.globalPosition().toPoint() - self._drag_pos)
-            event.accept()
-
-    def mouseReleaseEvent(self, event):
-        self._drag_pos = None
-
-    def mouseDoubleClickEvent(self, event):
-        self._toggle_max()
-
-
-class FramelessMixin:
-    _resize_edge = None
-    _resize_start_geom = None
-    _resize_start_pos = None
-    BORDER = 7
-
-    def setup_frameless(self):
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window | Qt.WindowMinMaxButtonsHint)
-
-    def _edge_at(self, pos):
-        r = self.rect()
-        x, y = pos.x(), pos.y()
-        left = x < self.BORDER
-        right = x > r.width() - self.BORDER
-        top = y < self.BORDER
-        bottom = y > r.height() - self.BORDER
-        if top and left: return "tl"
-        if top and right: return "tr"
-        if bottom and left: return "bl"
-        if bottom and right: return "br"
-        if left: return "l"
-        if right: return "r"
-        if top: return "t"
-        if bottom: return "b"
-        return None
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            edge = self._edge_at(event.pos())
-            if edge:
-                self._resize_edge = edge
-                self._resize_start_geom = self.geometry()
-                self._resize_start_pos = event.globalPosition().toPoint()
-                event.accept()
-                return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self._resize_edge and self._resize_start_geom is not None:
-            g = self._resize_start_geom
-            gp = event.globalPosition().toPoint()
-            dx = gp.x() - self._resize_start_pos.x()
-            dy = gp.y() - self._resize_start_pos.y()
-            new = QRect(g)
-            if "l" in self._resize_edge:
-                new.setLeft(g.left() + dx)
-            if "r" in self._resize_edge:
-                new.setRight(g.right() + dx)
-            if "t" in self._resize_edge:
-                new.setTop(g.top() + dy)
-            if "b" in self._resize_edge:
-                new.setBottom(g.bottom() + dy)
-            if new.width() >= self.minimumWidth() and new.height() >= self.minimumHeight():
-                self.setGeometry(new)
-            event.accept()
-            return
-        e = self._edge_at(event.pos())
-        cursors = {"l": Qt.SizeHorCursor, "r": Qt.SizeHorCursor, "t": Qt.SizeVerCursor, "b": Qt.SizeVerCursor,
-                   "tl": Qt.SizeFDiagCursor, "br": Qt.SizeFDiagCursor, "tr": Qt.SizeBDiagCursor, "bl": Qt.SizeBDiagCursor}
-        if e in cursors:
-            self.setCursor(cursors[e])
-        else:
-            self.unsetCursor()
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        self._resize_edge = None
-        self._resize_start_geom = None
-        self._resize_start_pos = None
-        super().mouseReleaseEvent(event)
 
 """PySide6 dashboard with pyqtgraph traffic charts (Winbox v4 dark theme)."""
 
@@ -153,14 +42,14 @@ from collections import deque
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import (
-    QEasingCurve, QPoint, QPropertyAnimation, QRect, QSize, Qt, QTimer,
+    QEasingCurve, QPoint, QPropertyAnimation, QSize, Qt, QTimer,
     QUrl, QVariantAnimation, Signal,
 )
 from PySide6.QtGui import QBrush, QColor, QFont, QLinearGradient
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu, QProgressBar, QPushButton,
-    QScrollArea, QStyle, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QSizeGrip,
+    QScrollArea, QStyle, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from app.alarms import (
@@ -1047,14 +936,13 @@ class HeaderBar(QFrame):
             self.fullscreen_btn.setToolTip("Exit fullscreen")
 
 
-class LogDetailWindow(FramelessMixin, QDialog):
-    """Separate, resizable window with the same custom title bar as the dashboard."""
+class LogDetailWindow(QDialog):
+    """Separate log window with the native OS title bar."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Router Logs — Detail")
         self.setStyleSheet(scaled_qss())
-        self.setup_frameless()
         self.setMinimumSize(640, 420)
         self.resize(900, 560)
 
@@ -1117,7 +1005,7 @@ class LogDetailWindow(FramelessMixin, QDialog):
             QApplication.clipboard().setText("\n".join(lines))
 
 
-class MonitorWindow(FramelessMixin, QMainWindow):
+class MonitorWindow(QMainWindow):
     setup_requested = Signal()  # acts as Disconnect
     settings_requested = Signal()
     config_applied = Signal(object)
@@ -1147,7 +1035,6 @@ class MonitorWindow(FramelessMixin, QMainWindow):
         _ip = str(resource_path("assets/icon.png"))
         if os.path.exists(_ip):
             self.setWindowIcon(QIcon(_ip))
-        self.setup_frameless()
         screen = None
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance()
@@ -1569,7 +1456,7 @@ class MonitorWindow(FramelessMixin, QMainWindow):
         if self._log_detail is None:
             self._log_detail = LogDetailWindow(self)
         self._log_detail.set_logs(self._last_logs)
-        self._log_detail.show()
+        self._log_detail.showMaximized()
         self._log_detail.raise_()
         self._log_detail.activateWindow()
 
