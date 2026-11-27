@@ -857,7 +857,13 @@ class TrafficChart(QFrame):
         tx = median_filter([p[2] for p in points])
 
         start = right - self.window_seconds
-        grid = [start + i for i in range(self.window_seconds + 1)]
+        # Hanya gambar rentang yang benar-benar memiliki sampel. Grid penuh
+        # window + np.interp(left/right=...) mengisi waktu tanpa data dengan
+        # nilai sampel pertama/terakhir, sehingga garis tampak memanjang
+        # sampai NOW walaupun baru beberapa detik datanya masuk.
+        first_x, last_x = xs[0], xs[-1]
+        steps = max(1, int(round(last_x - first_x)))
+        grid = list(np.linspace(first_x, last_x, steps + 1))
         self._x_grid = grid
         self._target_rx = list(np.interp(grid, xs, rx, left=rx[0], right=rx[-1]))
         self._target_tx = list(np.interp(grid, xs, tx, left=tx[0], right=tx[-1]))

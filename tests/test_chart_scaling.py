@@ -87,3 +87,40 @@ def test_one_isolated_spike_does_not_expand_the_y_axis():
     chart._draw(history, now)
 
     assert chart.plot.getAxis("left").range[1] <= 2e8
+
+
+def test_chart_does_not_draw_through_unobserved_time_at_startup():
+    app = QApplication.instance() or QApplication([])
+    chart = TrafficChart(InterfaceConfig(name="ether1"), 120)
+    now, wall = 1000.0, 1_700_000_000.0
+    # Baru dua sampel masuk; sisanya belum ada data sama sekali.
+    chart._draw([(now - 2, 45e6, 9e6), (now - 1, 46e6, 9e6)], now, wall)
+
+    x, _ = chart.rx_curve.getData()
+
+    assert x.min() >= wall - 2 - 1e-6
+    assert x.max() <= wall - 1 + 1e-6
+
+
+def test_chart_with_one_sample_stays_a_single_point_near_now():
+    app = QApplication.instance() or QApplication([])
+    chart = TrafficChart(InterfaceConfig(name="ether1"), 120)
+    now, wall = 1000.0, 1_700_000_000.0
+
+    chart._draw([(now, 45e6, 9e6)], now, wall)
+    x, _ = chart.rx_curve.getData()
+
+    assert x.max() - x.min() < 1e-6
+
+
+def test_chart_fills_the_whole_window_once_history_is_complete():
+    app = QApplication.instance() or QApplication([])
+    chart = TrafficChart(InterfaceConfig(name="ether1"), 120)
+    now = 1000.0
+    history = [(now - 120 + i, 45e6, 9e6) for i in range(121)]
+
+    chart._draw(history, now)
+    x, _ = chart.rx_curve.getData()
+
+    assert x.min() <= -120 + 1e-6
+    assert x.max() >= -1e-6  # tanpa wall clock, sumbu relatif berakhir di 0 (NOW)
