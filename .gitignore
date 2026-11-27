@@ -21,3 +21,8 @@ Release/
 backup_*/
 *.bak
 *.log
+
+# Per-user alarm settings and uploaded audio
+.userdata/
+alarm_rules.json
+user_data/
