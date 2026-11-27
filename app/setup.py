@@ -2,11 +2,17 @@
 from __future__ import annotations
 
 import os
+import shutil
+import uuid
+from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -20,11 +26,16 @@ from PySide6.QtWidgets import (
     QStyle,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from app.paths import resource_path
+from app.alarms import (
+    DEFAULT_ALARM_SOUND, DEFAULT_WARNING_SOUND, AlarmRule, AlarmSettings,
+    AlarmStore,
+)
+from app.paths import resource_path, user_dir
 from app.profiles import InterfaceChoice, ProfileStore, RouterProfile
 from app.routeros_api import RouterOsApi
 from app.config import ApiConfig
@@ -49,12 +60,17 @@ class TaskWorker(QThread):
 
 class SetupWindow(FramelessMixin, QMainWindow):
     connect_requested = Signal(object)  # RouterProfile
+    settings_applied = Signal(object)   # AppConfig
 
     def __init__(self, store: ProfileStore, on_quit: Callable[[], None] | None = None):
         super().__init__()
         self.store = store
         self.on_quit = on_quit
         self._workers: list[TaskWorker] = []
+        self._settings_mode = False
+        self._base_config = None
+        self._readonly = False
+        self.alarm_settings = AlarmStore().load()
         self.setWindowTitle("Login SNMP Mikrotik")
         self.resize(1080, 700)
         from PySide6.QtGui import QIcon
@@ -108,16 +124,24 @@ class SetupWindow(FramelessMixin, QMainWindow):
         self.btn_save = QPushButton("Save Profile")
         self.btn_new = QPushButton("New Profile")
         self.btn_delete = QPushButton("Delete")
-        for b in (self.btn_connect, self.btn_save, self.btn_new, self.btn_delete):
+        self.btn_apply = QPushButton("Apply Settings")
+        self.btn_apply.hide()
+        for b in (self.btn_connect, self.btn_save, self.btn_new, self.btn_delete, self.btn_apply):
             tb.addWidget(b)
         body_layout.addWidget(toolbar)
 
-        # main split
+        self.tabs = QTabWidget()
+        body_layout.addWidget(self.tabs, 1)
+
+        # --- Koneksi -------------------------------------------------------
+        tab_conn = QWidget()
+        conn_layout = QVBoxLayout(tab_conn)
+        self.tabs.addTab(tab_conn, "Koneksi")
+
         split = QHBoxLayout()
         split.setSpacing(10)
-        body_layout.addLayout(split, 1)
+        conn_layout.addLayout(split, 1)
 
-        # left: connection form + interfaces
         left = QVBoxLayout()
         left.setSpacing(10)
         split.addLayout(left, 1)
@@ -169,12 +193,46 @@ class SetupWindow(FramelessMixin, QMainWindow):
         ident_row.addWidget(self.btn_fetch_id)
         self.form.addRow("Router Name (Identity):", ident_row)
         left.addWidget(grp_conn)
+        left.addStretch(1)
 
+        # right: saved routers
+        right = QVBoxLayout()
+        right.setSpacing(10)
+        split.addLayout(right, 1)
+
+        grp_routers = QGroupBox("Saved Routers")
+        rl = QVBoxLayout(grp_routers)
+        self.routers_table = QTableWidget(0, 5)
+        self.routers_table.setHorizontalHeaderLabels(["Identity", "IP Address", "Mode", "SNMP", "Monitored Interfaces"])
+        self.routers_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.routers_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.routers_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.routers_table.verticalHeader().setVisible(False)
+        self.routers_table.horizontalHeader().setStretchLastSection(True)
+        self.routers_table.setAlternatingRowColors(True)
+        self.routers_table.setColumnWidth(0, 150)
+        self.routers_table.setColumnWidth(1, 130)
+        self.routers_table.setColumnWidth(2, 70)
+        self.routers_table.setColumnWidth(3, 90)
+        rl.addWidget(self.routers_table)
+        right.addWidget(grp_routers, 1)
+
+        grp_info = QGroupBox("Selected Profile Summary")
+        info_layout = QVBoxLayout(grp_info)
+        self.quick_info = QLabel("No profile selected.")
+        self.quick_info.setWordWrap(True)
+        self.quick_info.setStyleSheet("font-size: 11px;")
+        info_layout.addWidget(self.quick_info)
+        right.addWidget(grp_info)
+
+        # --- Interface -----------------------------------------------------
+        tab_iface = QWidget()
+        iface_layout = QVBoxLayout(tab_iface)
+        self.tabs.addTab(tab_iface, "Interface")
         grp_if = QGroupBox("Interfaces")
         il = QVBoxLayout(grp_if)
         il.setSpacing(8)
 
-        # Move Scan Interfaces button inside Interfaces box
         scan_row = QHBoxLayout()
         scan_lbl = QLabel("Interface Discovery:")
         scan_lbl.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 600;")
@@ -211,38 +269,20 @@ class SetupWindow(FramelessMixin, QMainWindow):
         right_col.addWidget(self.btn_remove)
         lists_row.addLayout(right_col, 1)
         il.addLayout(lists_row)
-        left.addWidget(grp_if, 1)
+        iface_layout.addWidget(grp_if)
 
-        # right: saved routers
-        right = QVBoxLayout()
-        right.setSpacing(10)
-        split.addLayout(right, 1)
+        # --- Alarm ---------------------------------------------------------
+        tab_alarm = QWidget()
+        alarm_layout = QVBoxLayout(tab_alarm)
+        self.tabs.addTab(tab_alarm, "Alarm")
+        self._build_alarm_tab_widgets(alarm_layout)
 
-        grp_routers = QGroupBox("Saved Routers")
-        rl = QVBoxLayout(grp_routers)
-        self.routers_table = QTableWidget(0, 5)
-        self.routers_table.setHorizontalHeaderLabels(["Identity", "IP Address", "Mode", "SNMP", "Monitored Interfaces"])
-        self.routers_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.routers_table.setSelectionMode(QTableWidget.SingleSelection)
-        self.routers_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.routers_table.verticalHeader().setVisible(False)
-        self.routers_table.horizontalHeader().setStretchLastSection(True)
-        self.routers_table.setAlternatingRowColors(True)
-        self.routers_table.setColumnWidth(0, 150)
-        self.routers_table.setColumnWidth(1, 130)
-        self.routers_table.setColumnWidth(2, 70)
-        self.routers_table.setColumnWidth(3, 90)
-        rl.addWidget(self.routers_table)
-        right.addWidget(grp_routers, 1)
-
-        # quick info card
-        grp_info = QGroupBox("Selected Profile Summary")
-        info_layout = QVBoxLayout(grp_info)
-        self.quick_info = QLabel("No profile selected.")
-        self.quick_info.setWordWrap(True)
-        self.quick_info.setStyleSheet("font-size: 11px;")
-        info_layout.addWidget(self.quick_info)
-        right.addWidget(grp_info)
+        # --- Lanjutan ------------------------------------------------------
+        tab_advanced = QWidget()
+        advanced_layout = QVBoxLayout(tab_advanced)
+        self.tabs.addTab(tab_advanced, "Lanjutan")
+        self.advanced_layout = advanced_layout
+        advanced_layout.addWidget(QLabel("Pengaturan lanjutan per profil."))
 
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
@@ -269,8 +309,230 @@ class SetupWindow(FramelessMixin, QMainWindow):
         self.btn_remove.clicked.connect(self._remove_selected)
         self.btn_save.clicked.connect(self._save)
         self.btn_connect.clicked.connect(self._connect)
+        self.btn_apply.clicked.connect(self._apply_settings)
         self.btn_toggle_pw.clicked.connect(self._toggle_password)
         self.ros_combo.currentTextChanged.connect(self._on_device_mode_changed)
+
+    # -- alarm rules -------------------------------------------------------
+    def _set_status(self, text: str, color: str = "#EF4444") -> None:
+        label = getattr(self, "status_label", None)
+        if label is not None:
+            label.setText(text)
+            label.setStyleSheet(f"color: {color};")
+
+    def _sound_choices(self, extra: str = "") -> list[str]:
+        settings = getattr(self, "alarm_settings", AlarmSettings())
+        choices = [DEFAULT_ALARM_SOUND, DEFAULT_WARNING_SOUND]
+        candidates = ([extra] if extra else []) + [r.sound for r in settings.log_rules]
+        candidates.append(settings.ping_warning_sound)
+        for sound in candidates:
+            if sound and sound not in choices:
+                choices.append(sound)
+        return choices
+
+    def _make_sound_combo(self, current: str = "") -> QComboBox:
+        combo = QComboBox()
+        for sound in self._sound_choices(current):
+            combo.addItem(sound)
+        index = combo.findText(current)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+        return combo
+
+    def _set_combo_value(self, combo: QComboBox, value: str) -> None:
+        index = combo.findText(value)
+        if index < 0:
+            combo.addItem(value)
+            index = combo.findText(value)
+        combo.setCurrentIndex(index)
+
+    def _build_alarm_tab_widgets(self, parent_layout=None) -> None:
+        parent = None
+        if parent_layout is None:
+            parent = QWidget()
+            parent_layout = QVBoxLayout(parent)
+            self._alarm_tab_owner = parent  # keep the widgets alive in isolated tests
+
+        note = QLabel("Aturan log hanya dipakai RouterOS V6/V7. SwOS dan SNMP lain memakai warning ping.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #94a3b8;")
+        parent_layout.addWidget(note)
+
+        self.alarm_rules_table = QTableWidget(0, 5)
+        self.alarm_rules_table.setHorizontalHeaderLabels(
+            ["Enable", "Kata/Kalimat", "Suara", "Cooldown", "Test"]
+        )
+        self.alarm_rules_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.alarm_rules_table.verticalHeader().setVisible(False)
+        self.alarm_rules_table.horizontalHeader().setStretchLastSection(True)
+        self.alarm_rules_table.setColumnWidth(0, 60)
+        self.alarm_rules_table.setColumnWidth(1, 260)
+        self.alarm_rules_table.setColumnWidth(2, 240)
+        self.alarm_rules_table.setColumnWidth(3, 90)
+        parent_layout.addWidget(self.alarm_rules_table, 1)
+
+        actions = QHBoxLayout()
+        self.btn_add_rule = QPushButton("Add rule")
+        self.btn_upload_audio = QPushButton("Upload audio")
+        self.btn_remove_rule = QPushButton("Remove")
+        self.btn_apply_alarms = QPushButton("Apply alarm settings")
+        for button in (self.btn_add_rule, self.btn_upload_audio, self.btn_remove_rule, self.btn_apply_alarms):
+            actions.addWidget(button)
+        actions.addStretch(1)
+        parent_layout.addLayout(actions)
+
+        ping_group = QGroupBox("Warning ping / DNS")
+        ping_layout = QVBoxLayout(ping_group)
+        self.ping_enabled_check = QCheckBox("Aktifkan warning saat packet loss > 1%")
+        self.ping_sound_combo = self._make_sound_combo(DEFAULT_WARNING_SOUND)
+        ping_layout.addWidget(self.ping_enabled_check)
+        ping_layout.addWidget(QLabel("Suara warning:"))
+        ping_layout.addWidget(self.ping_sound_combo)
+        parent_layout.addWidget(ping_group)
+
+        self.btn_add_rule.clicked.connect(lambda: self._add_alarm_rule())
+        self.btn_upload_audio.clicked.connect(lambda: self._upload_audio())
+        self.btn_remove_rule.clicked.connect(self._remove_alarm_rule)
+        self.btn_apply_alarms.clicked.connect(self._apply_settings)
+        self._load_alarm_settings(getattr(self, "alarm_settings", AlarmStore().default()))
+
+    def _add_alarm_rule(self, rule: AlarmRule | None = None) -> None:
+        if rule is None:
+            rule = AlarmRule(id=uuid.uuid4().hex[:8], phrase="", sound=DEFAULT_ALARM_SOUND)
+        table = self.alarm_rules_table
+        row = table.rowCount()
+        table.insertRow(row)
+
+        enabled = QTableWidgetItem()
+        enabled.setFlags(enabled.flags() | Qt.ItemIsUserCheckable)
+        enabled.setCheckState(Qt.Checked if rule.enabled else Qt.Unchecked)
+        table.setItem(row, 0, enabled)
+
+        phrase = QTableWidgetItem(rule.phrase)
+        phrase.setData(Qt.UserRole, rule.id)
+        table.setItem(row, 1, phrase)
+        table.setCellWidget(row, 2, self._make_sound_combo(rule.sound))
+
+        cooldown = QDoubleSpinBox()
+        cooldown.setRange(0.0, 3600.0)
+        cooldown.setDecimals(1)
+        cooldown.setSuffix(" s")
+        cooldown.setValue(rule.cooldown_s)
+        table.setCellWidget(row, 3, cooldown)
+
+        test_btn = QPushButton("Test")
+        test_btn.clicked.connect(lambda _checked=False, r=row: self._test_alarm_rule(r))
+        table.setCellWidget(row, 4, test_btn)
+
+    def _load_alarm_settings(self, settings: AlarmSettings) -> None:
+        self.alarm_settings = settings
+        self.alarm_rules_table.setRowCount(0)
+        for rule in settings.log_rules:
+            self._add_alarm_rule(rule)
+        self.ping_enabled_check.setChecked(settings.ping_warning_enabled)
+        self._set_combo_value(self.ping_sound_combo, settings.ping_warning_sound)
+
+    def _collect_alarm_settings(self) -> AlarmSettings:
+        rules = []
+        for row in range(self.alarm_rules_table.rowCount()):
+            phrase_item = self.alarm_rules_table.item(row, 1)
+            phrase = phrase_item.text().strip() if phrase_item is not None else ""
+            if not phrase:
+                continue
+            enabled_item = self.alarm_rules_table.item(row, 0)
+            enabled = (
+                enabled_item.checkState() == Qt.Checked
+                if enabled_item is not None else True
+            )
+            sound_combo = self.alarm_rules_table.cellWidget(row, 2)
+            sound = sound_combo.currentText() if sound_combo is not None else DEFAULT_ALARM_SOUND
+            cooldown_widget = self.alarm_rules_table.cellWidget(row, 3)
+            cooldown = float(cooldown_widget.value()) if cooldown_widget is not None else 30.0
+            rule_id = str(phrase_item.data(Qt.UserRole) or uuid.uuid4().hex[:8])
+            rules.append(AlarmRule(
+                id=rule_id,
+                phrase=phrase,
+                name=phrase,
+                enabled=enabled,
+                sound=sound,
+                cooldown_s=cooldown,
+            ))
+        return AlarmSettings(
+            log_rules=rules,
+            ping_warning_enabled=self.ping_enabled_check.isChecked(),
+            ping_warning_sound=self.ping_sound_combo.currentText(),
+        )
+
+    def _remove_alarm_rule(self) -> None:
+        rows = sorted({index.row() for index in self.alarm_rules_table.selectedIndexes()})
+        if not rows:
+            rows = [self.alarm_rules_table.currentRow()]
+        for row in reversed(rows):
+            if row >= 0:
+                self.alarm_rules_table.removeRow(row)
+
+    def _test_alarm_rule(self, row: int) -> None:
+        combo = self.alarm_rules_table.cellWidget(row, 2)
+        sound = combo.currentText() if combo is not None else DEFAULT_ALARM_SOUND
+        from app.ui import _play_sound
+
+        _play_sound(sound)
+
+    def _validate_audio_upload(self, path: Path):
+        try:
+            candidate = Path(path)
+            if candidate.suffix.lower() not in {".mp3", ".wav", ".ogg"}:
+                return None
+            if not candidate.is_file() or candidate.stat().st_size > 2 * 1024 * 1024:
+                return None
+        except OSError:
+            return None
+        return candidate
+
+    def _upload_audio(self) -> str | None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self, "Pilih audio alarm", "", "Audio (*.mp3 *.wav *.ogg)"
+        )
+        if not selected:
+            return None
+        source = self._validate_audio_upload(Path(selected))
+        if source is None:
+            self._set_status("Audio harus .mp3/.wav/.ogg dan maksimal 2 MB.")
+            return None
+        relative = f"alarms/{uuid.uuid4().hex}{source.suffix.lower()}"
+        target = user_dir() / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        table = getattr(self, "alarm_rules_table", None)
+        if table is not None:
+            for row in range(table.rowCount()):
+                combo = table.cellWidget(row, 2)
+                if isinstance(combo, QComboBox):
+                    self._set_combo_value(combo, relative)
+        ping_combo = getattr(self, "ping_sound_combo", None)
+        if ping_combo is not None:
+            self._set_combo_value(ping_combo, relative)
+        self._set_status(f"Audio tersimpan: {source.name}", "#22C55E")
+        return relative
+
+    def _persist_alarm_settings(self) -> None:
+        self.alarm_settings = self._collect_alarm_settings()
+        AlarmStore().save(self.alarm_settings)
+
+    def _current_config(self):
+        from app.config import AppConfig
+
+        if self._readonly and self._base_config is not None:
+            return self._base_config
+        profile = self._collect_profile()
+        if not profile.host:
+            return AppConfig()
+        return ProfileStore.to_appconfig(profile)
+
+    def _apply_settings(self) -> None:
+        self._persist_alarm_settings()
+        self._set_status("Pengaturan diterapkan.", "#22C55E")
+        self.settings_applied.emit(self._current_config())
 
     def _on_device_mode_changed(self, mode: str):
         is_swos = (mode or "").strip().lower() == "swos"
@@ -582,6 +844,7 @@ class SetupWindow(FramelessMixin, QMainWindow):
 
     # -- save / connect ----------------------------------------------------
     def _save(self):
+        self._persist_alarm_settings()
         profile = self._collect_profile()
         if not profile.host:
             self.status_label.setText("IP Address is required.")
@@ -595,6 +858,7 @@ class SetupWindow(FramelessMixin, QMainWindow):
         self.status_label.setStyleSheet("color: #22C55E;")
 
     def _connect(self):
+        self._persist_alarm_settings()
         profile = self._collect_profile()
         if not profile.host:
             self.status_label.setText("IP Address is required.")
