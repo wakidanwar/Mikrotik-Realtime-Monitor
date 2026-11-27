@@ -967,6 +967,7 @@ class TrafficChart(QFrame):
 
 class HeaderBar(QFrame):
     setup_clicked = Signal()
+    settings_clicked = Signal()
     pause_clicked = Signal()
     scale_changed = Signal(int)
 
@@ -1005,6 +1006,11 @@ class HeaderBar(QFrame):
         self.fullscreen_btn.setToolTip("Toggle fullscreen")
         self.fullscreen_btn.clicked.connect(self._toggle_fullscreen)
         layout.addWidget(self.fullscreen_btn, 0, Qt.AlignVCenter)
+
+        self.settings_btn = QPushButton("Settings")
+        self.settings_btn.setIcon(qta.icon("fa5s.cog", color="#38bdf8"))
+        self.settings_btn.clicked.connect(self.settings_clicked.emit)
+        layout.addWidget(self.settings_btn, 0, Qt.AlignVCenter)
 
         self.setup_btn = QPushButton("Disconnect")
         self.setup_btn.setIcon(qta.icon("fa5s.power-off", color="#f87171"))
@@ -1113,6 +1119,8 @@ class LogDetailWindow(FramelessMixin, QDialog):
 
 class MonitorWindow(FramelessMixin, QMainWindow):
     setup_requested = Signal()  # acts as Disconnect
+    settings_requested = Signal()
+    config_applied = Signal(object)
 
     def __init__(self, config: AppConfig, state: MonitorState):
         super().__init__()
@@ -1171,6 +1179,7 @@ class MonitorWindow(FramelessMixin, QMainWindow):
 
         self.header = HeaderBar(config)
         self.header.setup_clicked.connect(self._on_disconnect_clicked)
+        self.header.settings_clicked.connect(self.settings_requested.emit)
         self.header.pause_clicked.connect(self.toggle_pause)
         self.header.scale_changed.connect(self._apply_ui_scale)
         body_layout.addWidget(self.header)
@@ -1563,6 +1572,10 @@ class MonitorWindow(FramelessMixin, QMainWindow):
         self._log_detail.show()
         self._log_detail.raise_()
         self._log_detail.activateWindow()
+
+    def apply_config(self, config: AppConfig) -> None:
+        """Ask the application controller to rebuild this window with new config."""
+        self.config_applied.emit(config)
 
     def start(self, demo: bool = False) -> None:
         self._workers = build_collectors(self.config, self.state, self._stop, demo=demo)

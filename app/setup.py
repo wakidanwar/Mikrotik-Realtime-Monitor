@@ -318,10 +318,98 @@ class SetupWindow(FramelessMixin, QMainWindow):
         self.btn_save.clicked.connect(self._save)
         self.btn_connect.clicked.connect(self._connect)
         self.btn_apply.clicked.connect(self._apply_settings)
+        self.closeEvent = self._on_close_event
         self.btn_toggle_pw.clicked.connect(self._toggle_password)
         self.ros_combo.currentTextChanged.connect(self._on_device_mode_changed)
         self.selected_list.itemSelectionChanged.connect(self._on_monitored_selected)
         self.iface_max_spin.valueChanged.connect(self._on_iface_max_changed)
+
+    # -- settings mode -----------------------------------------------------
+    def set_settings_mode(self, config, readonly: bool = False, tab: str = "Alarm") -> None:
+        self._settings_mode = True
+        self._base_config = config
+        self._readonly = readonly
+        for button in (self.btn_connect, self.btn_save, self.btn_new, self.btn_delete):
+            button.hide()
+        self.btn_apply.show()
+        self.btn_fetch_id.setEnabled(not readonly)
+        self.btn_scan.setEnabled(not readonly)
+        self.btn_use.setEnabled(not readonly)
+        self.btn_remove.setEnabled(not readonly)
+        if readonly:
+            for index in (0, 1):
+                self.tabs.setTabEnabled(index, False)
+            self.tabs.setTabEnabled(2, True)
+            self.tabs.setTabEnabled(3, True)
+        if config is not None:
+            self._load_config_into_fields(config)
+            self.alarm_settings = AlarmStore().load()
+            self._load_alarm_settings(self.alarm_settings)
+        self.show_tab(tab)
+
+    def set_normal_mode(self) -> None:
+        self._settings_mode = False
+        self._base_config = None
+        self._readonly = False
+        for button in (self.btn_connect, self.btn_save, self.btn_new, self.btn_delete):
+            button.show()
+        self.btn_apply.hide()
+        self.btn_fetch_id.setEnabled(True)
+        self.btn_scan.setEnabled(True)
+        self.btn_use.setEnabled(True)
+        self.btn_remove.setEnabled(True)
+        for index in range(self.tabs.count()):
+            self.tabs.setTabEnabled(index, True)
+        self.tabs.setCurrentIndex(0)
+
+    def show_tab(self, name: str) -> None:
+        for index in range(self.tabs.count()):
+            if self.tabs.tabText(index) == name:
+                self.tabs.setCurrentIndex(index)
+                return
+
+    def _load_config_into_fields(self, config) -> None:
+        from app.config import OidsConfig
+
+        self.host_edit.setText(config.router.host)
+        self.login_edit.setText(config.router.api.username)
+        self.password_edit.setText(config.router.api.password)
+        self.community_edit.setText(config.router.snmp.community)
+        self.api_port_spin.setValue(config.router.api.port)
+        self.identity_edit.setText(config.router.name)
+        self.snmp_port_spin.setValue(config.router.snmp.port)
+        self.snmp_timeout_spin.setValue(config.router.snmp.timeout)
+        self.snmp_retries_spin.setValue(config.router.snmp.retries)
+        self.api_interval_spin.setValue(config.router.api.interval)
+        self.polling_interval_spin.setValue(config.polling.interval)
+        self.history_spin.setValue(config.polling.history_seconds)
+        self.ping_interval_spin.setValue(config.ping.interval)
+        self.ping_timeout_spin.setValue(config.ping.timeout_ms)
+        self.ping_window_spin.setValue(config.ping.window)
+        self._load_ping_targets(config.ping.targets)
+        oids = config.oids or OidsConfig()
+        self.oid_temperature_edit.setText(oids.temperature)
+        self.oid_voltage_edit.setText(oids.voltage)
+        self.oid_cpu_edit.setText(oids.cpu)
+        self.oid_active_users_edit.setText(oids.active_users)
+        self.selected_list.clear()
+        for interface in config.interfaces:
+            item = QListWidgetItem(interface.name)
+            item.setData(Qt.UserRole, {
+                "name": interface.name,
+                "label": interface.label or interface.name,
+                "max_mbps": interface.max_mbps,
+            })
+            self.selected_list.addItem(item)
+
+    def _on_close_event(self, event) -> None:
+        if self._settings_mode:
+            self.hide()
+            event.ignore()
+            return
+        if self.on_quit is not None:
+            self.on_quit()
+        event.accept()
 
     # -- advanced settings -------------------------------------------------
     def _build_advanced_tab(self, parent_layout) -> None:
