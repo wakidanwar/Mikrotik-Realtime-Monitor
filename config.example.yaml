@@ -1,0 +1,62 @@
+# ---------------------------------------------------------------------------
+# MikroTik Real-Time Monitor - configuration
+#
+# Copy this file to config.yaml and edit it for your router:
+#     copy config.example.yaml config.yaml
+#
+# Secrets can come from the environment, e.g. password: "${MIKROTIK_PASSWORD}"
+# (both ${NAME} / $NAME and Windows-style %NAME% are expanded).
+# ---------------------------------------------------------------------------
+
+router:
+  name: "MikroTik-Router"        # label shown in the dashboard header
+  host: "192.168.88.1"           # router IP address or DNS name
+
+  snmp:
+    enabled: true                # primary collector
+    version: 2                   # 2 = SNMPv2c (recommended), 1 = SNMPv1
+    community: "public"
+    port: 161
+    timeout: 1.0                 # seconds per request
+    retries: 1
+
+  api:
+    enabled: false               # optional; needed for accurate PPPoE user counts
+    port: 8728                   # 8729 when use_ssl is true
+    username: "admin"
+    password: "${MIKROTIK_PASSWORD}"
+    use_ssl: false
+    interval: 2.0                # seconds between API polls
+
+polling:
+  interval: 1.0                  # SNMP sample interval in seconds (min 0.2)
+  history_seconds: 120           # how much traffic history the charts keep
+
+interfaces:
+  - name: "ether1"               # must match ifName (or ifDescr) on the router
+    label: "UPLINK"
+    max_mbps: 1000               # link speed hint if ifHighSpeed is unavailable
+  - name: "sfp1"
+    label: "SFP+"
+    max_mbps: 10000
+
+ping:
+  interval: 1.0
+  timeout_ms: 1000
+  window: 60                     # rolling window in seconds for avg / loss
+  targets:
+    - name: "Google DNS"
+      host: "8.8.8.8"
+    - name: "Google DNS 2"
+      host: "8.8.4.4"
+    - name: "Cloudflare"
+      host: "1.1.1.1"
+    - name: "Cloudflare 2"
+      host: "1.0.0.1"
+
+# Optional OID overrides. Empty strings mean "auto-detect".
+oids:
+  temperature: "1.3.6.1.4.1.14988.1.1.3.10.0"
+  voltage: "1.3.6.1.4.1.14988.1.1.3.8.0"
+  cpu: ""                        # auto: mtxrHlProcessorLoad, else hrProcessorLoad
+  active_users: ""               # auto: mtxrHotspotActiveUserCount

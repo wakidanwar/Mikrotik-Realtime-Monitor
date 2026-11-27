@@ -1,0 +1,23 @@
+﻿# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local configuration and secrets (never commit)
+config.yaml
+routers.json
+.env
+*.tmp
+
+# Build output and binaries (distribute via GitHub Releases)
+build/
+dist/
+Release/
+*.exe
+*.zip
+
+# Local backups and logs
+backup_*/
+*.bak
+*.log

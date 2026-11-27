@@ -1,0 +1,7 @@
+PySide6>=6.9,<7
+pyqtgraph>=0.13.7
+PyYAML>=6.0
+librouteros>=4.0
+QtAwesome>=1.4.0
+numpy>=2.0.0
+pytest>=8.0
